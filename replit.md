@@ -32,6 +32,7 @@ The application is built with a backend in FastAPI (Python) and a frontend using
     - **OKX:** For real-time cryptocurrency prices and candlestick data.
     - **OxaPay:** Used for white-label deposit processing (V1 API) and general exchanges.
     - **xRocket:** Facilitates deposits via the @xRocket Telegram bot, supporting multiple cryptocurrencies.
+    - **CryptoBot (Crypto Pay API):** Deposits via the @CryptoBot Telegram bot (create/check endpoints + signed webhook, token in CRYPTO_PAY_TOKEN secret).
     - **CoinMarketCap:** For cryptocurrency exchange rates.
     - **Telegram Bot API:** For core Telegram integration and bot functionalities.
 - **Database:** PostgreSQL.

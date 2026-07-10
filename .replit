@@ -1,6 +1,7 @@
 modules = ["nodejs-20", "web", "bash", "python-3.11", "postgresql-16"]
 [agent]
 expertMode = true
+integrations = ["github:1.0.0"]
 
 [nix]
 channel = "stable-25_05"
@@ -41,4 +42,3 @@ run = ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5000"]
 [userenv]
 
 [userenv.shared]
-ADMIN_API_KEY = "bd52333a7da2bd085b26f76f168d7d44cff64b2f0e25799ec9e9e901233e3b31"

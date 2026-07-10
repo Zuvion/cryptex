@@ -17,6 +17,7 @@ CMC_API_KEY = os.getenv("CMC_API_KEY", os.getenv("Coinmarketcap_CMC_API_KEY"))
 OXAPAY_API_KEY = os.getenv("OXAPAY_API_KEY", "")
 OXAPAY_MERCHANT_KEY = os.getenv("OXAPAY_MERCHANT_KEY", "")
 XROCKET_API_KEY = os.getenv("XROCKET_API_KEY", "")
+CRYPTO_PAY_TOKEN = os.getenv("CRYPTO_PAY_TOKEN", "")
 ADMIN_ID = int(os.getenv("ADMIN_ID")) if os.getenv("ADMIN_ID") else None
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "")
 
@@ -508,7 +509,7 @@ app.add_middleware(
     allow_credentials=False,
 )
 
-_SKIP_AUTH_PATHS = frozenset(["/", "/health", "/webhook", "/api/oxapay/webhook", "/api/xrocket/webhook", "/favicon.ico"])
+_SKIP_AUTH_PATHS = frozenset(["/", "/health", "/webhook", "/api/oxapay/webhook", "/api/xrocket/webhook", "/api/cryptobot/webhook", "/favicon.ico"])
 _SKIP_AUTH_PREFIXES = ("/static/", "/i18n/")
 _IS_PRODUCTION = bool(os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RENDER") or os.getenv("FLY_APP_NAME"))
 
@@ -1487,6 +1488,181 @@ async def xrocket_webhook(request: Request, db: AsyncSession=Depends(get_db)):
         return {"status": "error", "message": str(e)}
 
 
+# ========== CRYPTOBOT (Crypto Pay API) ==========
+
+class CryptoBotDepositPayload(BaseModel):
+    amount: float
+    currency: str = "USDT"
+
+CRYPTOBOT_API_URL = "https://pay.crypt.bot/api"
+
+@app.post("/api/deposit/cryptobot/create")
+async def api_cryptobot_deposit_create(p: CryptoBotDepositPayload, db: AsyncSession=Depends(get_db), request: Request=None):
+    MIN_CRYPTOBOT_DEPOSIT = 1.0
+    tid = getattr(request.state, 'telegram_id', None)
+    if not tid:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    if tid != str(ADMIN_ID) and p.currency == "USDT" and p.amount < MIN_CRYPTOBOT_DEPOSIT:
+        return JSONResponse({"ok": False, "error": f"Минимальная сумма {MIN_CRYPTOBOT_DEPOSIT} USDT"})
+
+    u = (await db.execute(select(User).where(User.telegram_id==str(tid)))).scalars().first()
+    if not u:
+        return JSONResponse({"ok": False, "error": "Пользователь не найден"})
+
+    if not CRYPTO_PAY_TOKEN:
+        return JSONResponse({"ok": False, "error": "CryptoBot не настроен"})
+
+    payload = {
+        "asset": p.currency,
+        "amount": str(p.amount),
+        "description": f"CRYPTEXA deposit #{u.profile_id}",
+        "payload": f"user_{u.id}",
+        "expires_in": 3600,
+    }
+
+    print(f"[CRYPTOBOT] Creating invoice for {p.amount} {p.currency}, user={u.telegram_id}")
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            headers = {"Crypto-Pay-API-Token": CRYPTO_PAY_TOKEN, "Content-Type": "application/json"}
+            async with session.post(f"{CRYPTOBOT_API_URL}/createInvoice", json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                result = await resp.json()
+                print(f"[CRYPTOBOT] Response: {result}")
+
+                if result.get("ok"):
+                    inv = result.get("result", {})
+                    invoice_id = str(inv.get("invoice_id", ""))
+                    bot_link = inv.get("bot_invoice_url") or inv.get("pay_url", "")
+                    mini_app_link = inv.get("mini_app_invoice_url", "")
+
+                    tx = Transaction(
+                        user_id=u.id,
+                        type="deposit",
+                        amount=p.amount,
+                        currency=p.currency,
+                        status="pending",
+                        details={
+                            "invoice_id": f"cryptobot_{invoice_id}",
+                            "method": "cryptobot",
+                            "currency": p.currency,
+                            "amount_usd": p.amount,
+                            "fee": 0,
+                            "bot_link": bot_link
+                        }
+                    )
+                    db.add(tx)
+                    await db.commit()
+                    print(f"[CRYPTOBOT] Invoice created: id={invoice_id}, link={bot_link}")
+
+                    return {
+                        "ok": True,
+                        "invoice_id": invoice_id,
+                        "bot_link": bot_link,
+                        "mini_app_link": mini_app_link,
+                        "amount": p.amount,
+                        "currency": p.currency,
+                        "fee": 0
+                    }
+                else:
+                    err = result.get("error", {})
+                    err_name = err.get("name", "Unknown error") if isinstance(err, dict) else str(err)
+                    print(f"[CRYPTOBOT] Error: {err}")
+                    return JSONResponse({"ok": False, "error": f"CryptoBot: {err_name}"})
+    except Exception as e:
+        print(f"[CRYPTOBOT] Exception: {e}")
+        import traceback; traceback.print_exc()
+        return JSONResponse({"ok": False, "error": str(e)})
+
+
+@app.get("/api/deposit/cryptobot/check")
+async def api_cryptobot_deposit_check(invoice_id: str, db: AsyncSession=Depends(get_db), request: Request=None):
+    tid = getattr(request.state, 'telegram_id', None)
+    if not tid:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    u = (await db.execute(select(User).where(User.telegram_id==str(tid)))).scalars().first()
+    if not u:
+        return {"ok": False, "paid": False}
+
+    if not CRYPTO_PAY_TOKEN:
+        return {"ok": False, "paid": False, "status": "not_configured"}
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            headers = {"Crypto-Pay-API-Token": CRYPTO_PAY_TOKEN}
+            async with session.get(f"{CRYPTOBOT_API_URL}/getInvoices", params={"invoice_ids": invoice_id}, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                result = await resp.json()
+                print(f"[CRYPTOBOT CHECK] invoice={invoice_id}, response={result}")
+
+                if result.get("ok"):
+                    items = (result.get("result") or {}).get("items") or []
+                    if not items:
+                        return {"ok": True, "paid": False, "status": "checking"}
+                    inv = items[0]
+                    status = inv.get("status", "")
+
+                    if status == "paid":
+                        full_invoice_id = f"cryptobot_{invoice_id}"
+                        amount = float(inv.get("amount", 0))
+                        success, msg = await process_deposit_payment(db, full_invoice_id, amount, "cryptobot_check")
+                        if success:
+                            return {"ok": True, "paid": True, "amount": amount}
+                        else:
+                            q = await db.execute(select(Transaction).where(
+                                Transaction.user_id == u.id,
+                                Transaction.type == "deposit",
+                                Transaction.status == "done"
+                            ))
+                            for tx_check in q.scalars().all():
+                                if tx_check.details and tx_check.details.get("invoice_id") == full_invoice_id:
+                                    return {"ok": True, "paid": True, "amount": tx_check.amount}
+                            return {"ok": True, "paid": False, "status": "processing"}
+                    elif status == "expired":
+                        return {"ok": True, "paid": False, "status": "expired"}
+                    else:
+                        return {"ok": True, "paid": False, "status": status or "active"}
+                else:
+                    return {"ok": True, "paid": False, "status": "checking"}
+    except Exception as e:
+        print(f"[CRYPTOBOT CHECK] Error: {e}")
+        return {"ok": True, "paid": False, "status": "error"}
+
+
+@app.post("/api/cryptobot/webhook")
+async def cryptobot_webhook(request: Request, db: AsyncSession=Depends(get_db)):
+    try:
+        body_bytes = await request.body()
+
+        # Fail-closed: без настроенного токена вебхук не обрабатывается
+        if not CRYPTO_PAY_TOKEN:
+            print(f"[CRYPTOBOT WEBHOOK] CRYPTO_PAY_TOKEN not configured, rejecting")
+            return JSONResponse({"status": "not configured"}, status_code=503)
+
+        # Проверка подписи: HMAC-SHA256 тела запроса ключом SHA256(token)
+        signature = request.headers.get("crypto-pay-api-signature", "")
+        secret = hashlib.sha256(CRYPTO_PAY_TOKEN.encode()).digest()
+        expected = hmac.new(secret, body_bytes, hashlib.sha256).hexdigest()
+        if not signature or not hmac.compare_digest(expected, signature):
+            print(f"[CRYPTOBOT WEBHOOK] Invalid signature, rejecting")
+            return JSONResponse({"status": "invalid signature"}, status_code=403)
+
+        data = json.loads(body_bytes.decode())
+        print(f"[CRYPTOBOT WEBHOOK] Received: {data}")
+
+        if data.get("update_type") == "invoice_paid":
+            inv = data.get("payload", {})
+            invoice_id = str(inv.get("invoice_id", ""))
+            amount = float(inv.get("amount", 0) or 0)
+            full_invoice_id = f"cryptobot_{invoice_id}"
+            success, msg = await process_deposit_payment(db, full_invoice_id, amount, "cryptobot_webhook")
+            print(f"[CRYPTOBOT WEBHOOK] Process result: {success}, {msg}")
+
+        return {"status": "ok"}
+    except Exception as e:
+        print(f"[CRYPTOBOT WEBHOOK] Error: {e}")
+        import traceback; traceback.print_exc()
+        return {"status": "error", "message": str(e)}
+
+
 class WithdrawPayload(BaseModel):
     amount: float
     currency: str = "USDT"
@@ -1974,28 +2150,6 @@ async def api_trade_status(order_id:int, db: AsyncSession=Depends(get_db), reque
             trx.details = {**existing_details, "result": tr.result, "payout": tr.payout, "close_price": cur}
         await db.commit()
         
-        displayed_balance = u.balance_usdt or 0
-        try:
-            if win:
-                profit = round(payout, 2)
-                emoji = "🎉"
-                msg = f"{emoji} <b>ВЫИГРЫШ!</b>\n\n"
-                msg += f"📊 Пара: {tr.pair}\n"
-                msg += f"📈 Направление: {'ВВЕРХ ⬆️' if tr.side == 'buy' else 'ВНИЗ ⬇️'}\n"
-                msg += f"💰 Ставка: {round(tr.amount_usdt, 2)} USDT\n"
-                msg += f"✅ Выплата: +{profit} USDT\n"
-                msg += f"💵 Баланс: {round(displayed_balance, 2)} USDT"
-            else:
-                emoji = "😔"
-                msg = f"{emoji} <b>Не повезло</b>\n\n"
-                msg += f"📊 Пара: {tr.pair}\n"
-                msg += f"📈 Направление: {'ВВЕРХ ⬆️' if tr.side == 'buy' else 'ВНИЗ ⬇️'}\n"
-                msg += f"💰 Ставка: -{round(tr.amount_usdt, 2)} USDT\n"
-                msg += f"💵 Баланс: {round(displayed_balance, 2)} USDT\n\n"
-                msg += f"💪 Попробуйте еще раз!"
-            
-            await bot_send_message(int(u.telegram_id), msg, parse_mode="HTML")
-        except: pass
     return {"order_id": tr.id, "status": tr.status, "result": tr.result, "amount_usdt": tr.amount_usdt, "payout": tr.payout, "opened_at": tr.opened_at.isoformat()}
 
 @app.get("/api/trade/active")
@@ -2140,8 +2294,9 @@ async def api_stats(db: AsyncSession=Depends(get_db), request: Request=None):
     if not tid:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     u=(await db.execute(select(User).where(User.telegram_id==str(tid)))).scalars().first()
-    trades=(await db.execute(select(Trade).where(Trade.user_id==u.id).order_by(Trade.opened_at.desc()).limit(200))).scalars().all()
-    earned=sum(t.payout for t in trades if t.result=="win"); lost=sum(t.amount_usdt for t in trades if t.result=="loss")
+    all_trades=(await db.execute(select(Trade).where(Trade.user_id==u.id).order_by(Trade.opened_at.desc()))).scalars().all()
+    trades = all_trades[:200]
+    earned=sum(t.payout for t in all_trades if t.result=="win"); lost=sum(t.amount_usdt for t in all_trades if t.result=="loss")
     eq=0.0; equity=[]; 
     for i,t in enumerate(reversed(trades)):
         if t.result=="win": eq+=t.payout
@@ -2149,7 +2304,7 @@ async def api_stats(db: AsyncSession=Depends(get_db), request: Request=None):
         equity.append({"t":i,"v":max(0.0,min(1.0,0.5+eq/1000.0))})
     
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    today_trades = [t for t in trades if t.opened_at and t.opened_at >= today_start]
+    today_trades = [t for t in all_trades if t.opened_at and t.opened_at >= today_start]
     pnl_today = sum(t.payout for t in today_trades if t.result=="win") - sum(t.amount_usdt for t in today_trades if t.result=="loss")
     pnl_total = earned - lost
     
@@ -2166,10 +2321,11 @@ async def api_stats(db: AsyncSession=Depends(get_db), request: Request=None):
                 soonest = remaining
         next_trade_seconds = int(soonest) if soonest else None
     
-    closed_trades = [t for t in trades if t.status == "closed"]
+    closed_trades = [t for t in all_trades if t.status in ("completed", "closed")]
     wins_count = len([t for t in closed_trades if t.result == "win"])
     losses_count = len([t for t in closed_trades if t.result == "loss"])
     total_closed = len(closed_trades)
+    volume_usdt = sum(t.amount_usdt for t in all_trades if t.amount_usdt)
     
     return {"earned":round(earned,4),"lost":round(lost,4),"balance":round(u.balance_usdt or 0,4),
             "trades":[{"pair":t.pair,"side":t.side,"amount_usdt":t.amount_usdt,"result":t.result or "-","opened_at":t.opened_at.isoformat()} for t in trades],
@@ -2181,6 +2337,7 @@ async def api_stats(db: AsyncSession=Depends(get_db), request: Request=None):
             "wins_count": wins_count,
             "losses_count": losses_count,
             "total_trades": total_closed,
+            "volume_usdt": round(volume_usdt, 2),
             "telegram_id": u.telegram_id}
 
 @app.get("/api/support")
@@ -2204,22 +2361,10 @@ async def api_support_send(request: Request, db: AsyncSession=Depends(get_db), f
         os.makedirs("static/uploads", exist_ok=True); name=f"{int(time.time())}_{file.filename}"; dest=os.path.join("static/uploads", name)
         with open(dest,"wb") as f: f.write(await file.read())
         file_path="/"+dest
-    msg=SupportMessage(user_id=u.id, sender="user", text=text, file_path=file_path); db.add(msg); await db.commit()
-    try:
-        reply_btn = [[{"text": "📝 Ответить", "callback_data": f"reply:{u.telegram_id}"}]]
-        msg_text = f"💬 Сообщение от пользователя\n👤 ID: {u.telegram_id}\n📝 Текст: {text or '[Файл]'}"
-        if file_path:
-            url=f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-            async with aiohttp.ClientSession() as s:
-                data=aiohttp.FormData()
-                data.add_field("chat_id", str(ADMIN_ID))
-                data.add_field("caption", msg_text)
-                data.add_field("photo", open(file_path.strip('/'),"rb"))
-                data.add_field("reply_markup", json.dumps({"inline_keyboard": reply_btn}))
-                await s.post(url, data=data)
-        else:
-            await bot_send_message(ADMIN_ID, msg_text, reply_btn)
-    except: pass
+    msg=SupportMessage(user_id=u.id, sender="user", text=text, file_path=file_path); db.add(msg)
+    admin_chat_msg = AdminChat(user_id=u.id, message_text=text or '[Файл]', is_from_admin=False, read=False)
+    db.add(admin_chat_msg)
+    await db.commit()
     return {"ok": True}
 
 @app.get("/api/admin_messages")
@@ -3059,6 +3204,8 @@ async def api_admin_chat_send(user_id: int, payload: AdminChatSendPayload, reque
         return {"success": False, "error": "User not found"}
     chat_msg = AdminChat(user_id=user.id, message_text=payload.message, is_from_admin=True)
     db.add(chat_msg)
+    support_msg = SupportMessage(user_id=user.id, sender="admin", text=payload.message)
+    db.add(support_msg)
     await db.commit()
     try:
         await bot_send_message(int(user.telegram_id), f"💬 <b>Сообщение от поддержки:</b>\n\n{payload.message}")
@@ -3086,12 +3233,20 @@ async def process_deposit_payment(db: AsyncSession, invoice_id: str, amount: flo
         print(f"[DEPOSIT:{source}] Transaction not found for invoice {invoice_id}")
         return False, "Transaction not found"
     
-    # Idempotency check - if already done, skip
+    # Re-select with row lock to prevent double-credit race (webhook + polling concurrently)
+    trx = (await db.execute(
+        select(Transaction).where(Transaction.id == trx.id).with_for_update()
+    )).scalars().first()
+    if not trx:
+        return False, "Transaction not found"
+    
+    # Idempotency check under lock - if already done, skip
     if trx.status == "done":
+        await db.commit()
         print(f"[DEPOSIT:{source}] Invoice {invoice_id} already processed (idempotent skip)")
         return True, "Already processed"
     
-    user = (await db.execute(select(User).where(User.id == trx.user_id))).scalars().first()
+    user = (await db.execute(select(User).where(User.id == trx.user_id).with_for_update())).scalars().first()
     if not user:
         print(f"[DEPOSIT:{source}] User not found for transaction {trx.id}")
         return False, "User not found"
@@ -3328,16 +3483,6 @@ async def poll_expired_trades():
                         
                         expired_count += 1
                         
-                        displayed_balance = u.balance_usdt or 0
-                        try:
-                            if win:
-                                profit = round(payout, 2)
-                                msg = f"🎉 <b>ВЫИГРЫШ!</b>\n\n📊 Пара: {tr.pair}\n💰 Ставка: {round(tr.amount_usdt, 2)} USDT\n✅ Выплата: +{profit} USDT\n💵 Баланс: {round(displayed_balance, 2)} USDT"
-                            else:
-                                msg = f"😔 <b>Сделка закрыта</b>\n\n📊 Пара: {tr.pair}\n💰 Ставка: {round(tr.amount_usdt, 2)} USDT\n❌ Результат: Проигрыш\n💵 Баланс: {round(displayed_balance, 2)} USDT"
-                            await bot_send_message(int(u.telegram_id), msg)
-                        except:
-                            pass
                 
                 if expired_count > 0:
                     await db.commit()
@@ -4103,9 +4248,10 @@ BTC, ETH, TON, SOL, BNB, XRP, DOGE, LTC, TRX, USDT
                     # Find user by telegram_id
                     user = (await db.execute(select(User).where(User.telegram_id == target_user_id))).scalars().first()
                     if user:
-                        # Save admin message to database
                         admin_msg = SupportMessage(user_id=user.id, sender="admin", text=text, file_path=None)
                         db.add(admin_msg)
+                        admin_chat_msg = AdminChat(user_id=user.id, message_text=text, is_from_admin=True)
+                        db.add(admin_chat_msg)
                         await db.commit()
                         
                         # Send notification to user via Telegram with button to open app
