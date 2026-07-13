@@ -302,12 +302,23 @@ GET/POST /proxy/admin/*   → проксирование к CRYPTEXA_API_URL/api
       "profile_id": 1001,
       "username": "john",
       "balance_usdt": 500.00,
+      "balance_rub": 0.00,
+      "preferred_fiat": "RUB",
+      "wallets": {"BTC": 0.005, "ETH": 0.1},
       "is_verified": false,
       "is_premium": true,
       "is_blocked": false,
+      "block_reason": null,
       "language": "ru",
       "lucky_mode": false,
+      "lucky_type": "win",
+      "lucky_until": null,
+      "lucky_max_wins": null,
+      "lucky_wins_used": 0,
       "custom_win_rate": null,
+      "referral_earnings": 25.00,
+      "referral_count": 3,
+      "referred_by": null,
       "last_online_at": "2026-03-31T12:00:00",
       "telegram_link": "tg://user?id=123456",
       "created_at": "2026-01-15T10:00:00",
@@ -398,7 +409,10 @@ Response: {"ok": true, "message_sent": true}
     "profile_id": 1001,
     "username": "john",
     "balance_usdt": 500.00,
+    "balance_rub": 0.00,
+    "preferred_fiat": "RUB",
     "wallets": {"BTC": 0.005, "ETH": 0.1, "TON": 50},
+    "addresses": {},
     "is_verified": false,
     "is_premium": false,
     "is_blocked": false,
@@ -409,6 +423,7 @@ Response: {"ok": true, "message_sent": true}
     "referral_earnings": 25.00,
     "referral_count": 3,
     "lucky_mode": false,
+    "lucky_type": "win",
     "lucky_until": null,
     "lucky_max_wins": null,
     "lucky_wins_used": 0,
@@ -653,6 +668,11 @@ Response: {
 **Правая панель** — чат:
 - Сообщения от пользователя слева (серый фон)
 - Сообщения от админа справа (фиолетовый фон)
+- **Фото и файлы**: если у сообщения есть `file_url` — это вложение пользователя:
+  - Изображения (.jpg/.jpeg/.png/.webp/.gif) — рендерить прямо в сообщении как `<img src="{file_url}">` (max-width 100%, max-height 320px, border-radius 10px, cursor pointer)
+  - Клик по фото → полноэкранный просмотр (overlay на весь экран, затемнённый фон, клик закрывает)
+  - Другие файлы (.pdf/.txt) — ссылка «📄 Файл» с `target="_blank"`
+  - `file_url` — абсолютный URL на сервер CRYPTEXA, грузится напрямую в `<img>`, CORS не нужен
 - Текстовое поле + кнопка отправки
 - Автоскролл вниз при новых сообщениях
 
@@ -692,13 +712,23 @@ Response: {
       {
         "id": 1,
         "text": "Привет, помогите...",
+        "file_url": null,
         "is_from_admin": false,
         "read": true,
         "created_at": "2026-03-31T10:00:00"
       },
       {
         "id": 2,
+        "text": "[Фото]",
+        "file_url": "https://<домен-cryptexa>/static/uploads/1783942112_85c6bccf4a.jpg",
+        "is_from_admin": false,
+        "read": true,
+        "created_at": "2026-03-31T10:02:00"
+      },
+      {
+        "id": 3,
         "text": "Здравствуйте! Чем могу помочь?",
+        "file_url": null,
         "is_from_admin": true,
         "read": true,
         "created_at": "2026-03-31T10:05:00"

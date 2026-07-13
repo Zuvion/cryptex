@@ -554,6 +554,19 @@ _SKIP_AUTH_PATHS = frozenset(["/", "/health", "/webhook", "/api/oxapay/webhook",
 _SKIP_AUTH_PREFIXES = ("/static/", "/i18n/")
 _IS_PRODUCTION = bool(os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RENDER") or os.getenv("FLY_APP_NAME"))
 
+def _admin_key_matches(header_val: str) -> bool:
+    """Compare X-Admin-API-Key header with ADMIN_API_KEY tolerantly.
+    HTTP headers are decoded as latin-1, so a UTF-8 key with non-latin chars
+    arrives mojibake'd; compare raw bytes as a fallback."""
+    if not ADMIN_API_KEY or not header_val:
+        return False
+    if header_val == ADMIN_API_KEY:
+        return True
+    try:
+        return header_val.encode("latin-1") == ADMIN_API_KEY.encode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return False
+
 @app.middleware("http")
 async def telegram_auth_middleware(request: Request, call_next):
     path = request.url.path
@@ -563,7 +576,7 @@ async def telegram_auth_middleware(request: Request, call_next):
         return await call_next(request)
     if path.startswith("/api/admin/"):
         api_key = request.headers.get("X-Admin-API-Key", "")
-        if ADMIN_API_KEY and api_key == ADMIN_API_KEY:
+        if _admin_key_matches(api_key):
             request.state.telegram_id = str(ADMIN_ID)
             request.state.telegram_username = None
             return await call_next(request)
@@ -2794,13 +2807,13 @@ async def admin_assets_reload(request: Request, db: AsyncSession=Depends(get_db)
 @app.get("/api/admin/health")
 async def api_admin_health(request: Request):
     api_key = request.headers.get("X-Admin-API-Key", "")
-    if not ADMIN_API_KEY or api_key != ADMIN_API_KEY:
+    if not _admin_key_matches(api_key):
         raise HTTPException(403, "Invalid API key")
     return {"ok": True, "app": "CRYPTEXA", "version": "1.0", "admin_id": str(ADMIN_ID)}
 
 async def require_admin(request: Request, db: AsyncSession = Depends(get_db)):
     api_key = request.headers.get("X-Admin-API-Key", "")
-    if ADMIN_API_KEY and api_key == ADMIN_API_KEY:
+    if _admin_key_matches(api_key):
         return str(ADMIN_ID)
     tid = getattr(request.state, 'telegram_id', None)
     if not tid or str(tid) != str(ADMIN_ID):
@@ -2898,9 +2911,15 @@ async def api_admin_users(request: Request, db: AsyncSession = Depends(get_db), 
             users_data.append({
                 "id": u.id, "telegram_id": u.telegram_id, "profile_id": u.profile_id,
                 "username": u.username, "balance_usdt": round(u.balance_usdt or 0, 2),
+                "balance_rub": round(u.balance_rub or 0, 2), "preferred_fiat": u.preferred_fiat or "RUB",
+                "wallets": u.wallets or {},
                 "is_verified": u.is_verified or False, "is_premium": u.is_premium or False,
-                "is_blocked": u.is_blocked or False, "language": u.language,
+                "is_blocked": u.is_blocked or False, "block_reason": u.block_reason, "language": u.language,
                 "lucky_mode": u.lucky_mode or False, "lucky_type": u.lucky_type or "win", "custom_win_rate": u.custom_win_rate,
+                "lucky_until": u.lucky_until.isoformat() if u.lucky_until else None,
+                "lucky_max_wins": u.lucky_max_wins, "lucky_wins_used": u.lucky_wins_used or 0,
+                "referral_earnings": round(u.referral_earnings or 0, 2), "referral_count": u.referral_count or 0,
+                "referred_by": u.referred_by,
                 "last_online_at": u.last_online_at.isoformat() if u.last_online_at else None,
                 "telegram_link": f"tg://user?id={u.telegram_id}",
                 "created_at": u.created_at.isoformat() if u.created_at else None,
@@ -2922,9 +2941,10 @@ async def api_admin_user_detail(profile_id: int, request: Request, db: AsyncSess
         user_data = {
             "id": user.id, "telegram_id": user.telegram_id, "profile_id": user.profile_id,
             "username": user.username, "balance_usdt": round(user.balance_usdt or 0, 2),
+            "balance_rub": round(user.balance_rub or 0, 2), "preferred_fiat": user.preferred_fiat or "RUB",
             "is_verified": user.is_verified or False, "is_premium": user.is_premium or False,
             "is_blocked": user.is_blocked or False, "block_reason": user.block_reason,
-            "language": user.language, "wallets": user.wallets or {},
+            "language": user.language, "wallets": user.wallets or {}, "addresses": user.addresses or {},
             "referral_code": user.referral_code, "referred_by": user.referred_by,
             "referral_earnings": round(user.referral_earnings or 0, 2) if hasattr(user, 'referral_earnings') else 0,
             "referral_count": user.referral_count or 0 if hasattr(user, 'referral_count') else 0,

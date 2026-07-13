@@ -3468,7 +3468,7 @@ async function openSupport(){
       <button class="btn-back" id="backAssets">←</button>
       <div class="chat-title">${t('support.title')}</div>
     </div>
-    <div class="chat-messages" id="chat"></div>
+    <div class="chat-messages" id="chat"><div style="text-align:center;color:#7B8CA2;padding:24px 0;font-size:13px" id="chatLoading">${t('support.loading')}</div></div>
     <div class="chat-input-container">
       <label for="file" class="btn-attach">+</label>
       <input type="file" id="file" accept="image/*" style="display:none"/>
@@ -3608,8 +3608,21 @@ async function openSupport(){
         
         chat.appendChild(d); 
       }); 
+      if (adminMsgs.length === 0 && msgs.length === 0) {
+        const emptyState = document.createElement('div');
+        emptyState.style.cssText = 'text-align:center;color:#7B8CA2;padding:24px 0;font-size:13px';
+        emptyState.textContent = t('support.no_messages');
+        chat.appendChild(emptyState);
+      }
       chat.scrollTop=chat.scrollHeight; 
-    }catch(e){ console.error('Load chat failed', e); } 
+    }catch(e){ 
+      console.error('Load chat failed', e); 
+      const chatEl = document.getElementById('chat');
+      const loadingEl = document.getElementById('chatLoading');
+      if (chatEl && loadingEl) {
+        loadingEl.textContent = t('support.connecting');
+      }
+    } 
   }
   await load();
   // Auto-refresh chat every 5 seconds to see admin replies
