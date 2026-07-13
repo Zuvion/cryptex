@@ -1162,8 +1162,8 @@ async function openDeposit(){
   }
 
   function showXRocketAmountInput(currency) {
-    const minAmount = currency === 'USDT' ? 1000 : 0;
-    const presets = currency === 'USDT' ? [1000, 2500, 5000, 10000, 25000, 50000] : [];
+    const minAmount = currency === 'USDT' ? 200 : 0;
+    const presets = currency === 'USDT' ? [200, 500, 1000, 2500, 5000, 10000] : [];
     const orText = t('deposit.or_custom');
     const logo = cryptoLogos[currency] || '';
 
@@ -1188,7 +1188,7 @@ async function openDeposit(){
         </div>
         <div style="border-top:1px solid #333;padding-top:12px;margin-top:12px;display:flex;justify-content:space-between">
           <span style="color:#7B8CA2;font-size:12px">${t('deposit.fee_zero')}</span>
-          <span style="color:#7B8CA2;font-size:12px">${t('deposit.min_short')}: ${minAmount ? `${minAmount} ${currency}` : '≈1000 USDT'}</span>
+          <span style="color:#7B8CA2;font-size:12px">${t('deposit.min_short')}: ${minAmount ? `${minAmount} ${currency}` : '≈200 USDT'}</span>
         </div>
       </div>
       <button class="btn btn-primary fullwidth" id="xrSubmit" style="padding:16px;font-size:16px;font-weight:600;background:#E040FB;border-radius:6px">${t('deposit.continue')}</button>
@@ -1351,8 +1351,8 @@ async function openDeposit(){
   }
 
   function showCryptoBotAmountInput(currency) {
-    const minAmount = currency === 'USDT' ? 1000 : 0;
-    const presets = currency === 'USDT' ? [1000, 2500, 5000, 10000, 25000, 50000] : [];
+    const minAmount = currency === 'USDT' ? 200 : 0;
+    const presets = currency === 'USDT' ? [200, 500, 1000, 2500, 5000, 10000] : [];
     const orText = t('deposit.or_custom');
     const logo = cryptoLogos[currency] || '';
 
@@ -1377,7 +1377,7 @@ async function openDeposit(){
         </div>
         <div style="border-top:1px solid #333;padding-top:12px;margin-top:12px;display:flex;justify-content:space-between">
           <span style="color:#7B8CA2;font-size:12px">${t('deposit.fee_zero')}</span>
-          <span style="color:#7B8CA2;font-size:12px">${t('deposit.min_short')}: ${minAmount ? `${minAmount} ${currency}` : '≈1000 USDT'}</span>
+          <span style="color:#7B8CA2;font-size:12px">${t('deposit.min_short')}: ${minAmount ? `${minAmount} ${currency}` : '≈200 USDT'}</span>
         </div>
       </div>
       <button class="btn btn-primary fullwidth" id="cbSubmit" style="padding:16px;font-size:16px;font-weight:600;background:#E040FB;border-radius:6px">${t('deposit.continue')}</button>
@@ -1598,8 +1598,8 @@ async function openDeposit(){
   }
 
   function showOxaPayAmountInput(coin, network) {
-    const minAmount = 1000;
-    const presets = [1000, 2500, 5000, 10000, 25000, 50000];
+    const minAmount = 200;
+    const presets = [200, 500, 1000, 2500, 5000, 10000];
     const orText = t('deposit.or_custom');
     const logo = cryptoLogos[coin.sym] || '';
 
@@ -1821,8 +1821,8 @@ async function openWithdraw(){
   } catch(e) { console.error('Failed to load user', e); }
   
   const totalBalance = user.balance_usdt || 0;
-  const MIN_USDT = 10;
-  const quickAmounts = [10, 25, 50, 100, 250, 500];
+  const MIN_USDT = 1000;
+  const quickAmounts = [1000, 2500, 5000, 10000, 25000, 50000];
   
   const networks = [
     { id: 'TRC20', name: 'Tron (TRC20)', hint: 'T...' },

@@ -39,7 +39,7 @@ elif _railway_domain:
     HOST_BASE = f"https://{_railway_domain}"
 else:
     HOST_BASE = os.getenv("HOST_BASE", "https://rengle.site")
-MIN_DEPOSIT_USDT = float(os.getenv("MIN_DEPOSIT_USDT", "1000"))
+MIN_DEPOSIT_USDT = float(os.getenv("MIN_DEPOSIT_USDT", "200"))
 
 async def check_min_deposit_equiv(amount: float, currency: str):
     """Возвращает None если сумма >= минимума (в USDT-эквиваленте), иначе текст ошибки."""
@@ -1741,7 +1741,7 @@ class WithdrawPayload(BaseModel):
     address: str
     network: str = "TRC20"
 
-MIN_WITHDRAW_USDT = 10.0
+MIN_WITHDRAW_USDT = float(os.getenv("MIN_WITHDRAW_USDT", "1000"))
 
 @app.post("/api/withdraw")
 async def api_withdraw(p: WithdrawPayload, db: AsyncSession=Depends(get_db), request: Request=None):
@@ -1754,7 +1754,7 @@ async def api_withdraw(p: WithdrawPayload, db: AsyncSession=Depends(get_db), req
         return JSONResponse({"ok":False,"error":"Пользователь не найден"})
 
     if p.amount < MIN_WITHDRAW_USDT:
-        return JSONResponse({"ok":False,"error":f"Минимальная сумма вывода: {MIN_WITHDRAW_USDT} USDT"})
+        return JSONResponse({"ok":False,"error":f"Минимальная сумма вывода: {MIN_WITHDRAW_USDT:.0f} USDT"})
     if not p.address or len(p.address) < 10:
         return JSONResponse({"ok":False,"error":"Введите корректный адрес кошелька"})
 
