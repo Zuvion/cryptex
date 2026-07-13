@@ -1,0 +1,6 @@
+- [Env vars vs Secrets on Replit](replit-env-plaintext.md) — shared env vars are written in plaintext into `.replit` (committed); sensitive keys must go into Secrets, and any key found in `.replit` is compromised and needs rotation.
+- [Deposit provider pattern](deposit-provider-pattern.md) — new payment providers (OxaPay/xRocket/CryptoBot) follow one pattern: create/check endpoints + fail-closed signed webhook + `process_deposit_payment` with prefixed invoice_id.
+- [Publish readiness](publish-readiness.md) — app needs Reserved VM (background pollers); past Autoscale publishes all failed; prod URL detection must gate on REPLIT_DEPLOYMENT, not REPLIT_DEV_DOMAIN.
+- [Price lookup fallbacks](price-lookup-fallbacks.md) — OKX has no TON pairs and CMC "TON" maps to wrong asset; use CryptoBot getExchangeRates as price fallback.
+- [Support chat uploads safety](support-uploads-safety.md) — user files/messages must be DOM-rendered (no innerHTML) and uploads renamed to uuid with extension whitelist, or stored XSS is possible.
+- [Legacy Railway deployment](legacy-railway-deploy.md) — old app copy on Railway with own DB; bot's default menu button pointed there and can't be changed via API, only per-chat or via BotFather.

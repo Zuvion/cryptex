@@ -1162,8 +1162,8 @@ async function openDeposit(){
   }
 
   function showXRocketAmountInput(currency) {
-    const minAmount = 1;
-    const presets = [5, 10, 25, 50, 100, 250];
+    const minAmount = currency === 'USDT' ? 1000 : 0;
+    const presets = currency === 'USDT' ? [1000, 2500, 5000, 10000, 25000, 50000] : [];
     const orText = t('deposit.or_custom');
     const logo = cryptoLogos[currency] || '';
 
@@ -1178,17 +1178,17 @@ async function openDeposit(){
       <div style="color:#7B8CA2;font-size:13px;margin-bottom:20px">${t('deposit.enter_amount_in') + ' ' + currency}</div>
 
       <div style="background:#131A2A;border-radius:6px;padding:20px;margin-bottom:16px">
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">
+        ${presets.length ? `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">
           ${presets.map(amt => `<button class="xr-preset-btn" data-amount="${amt}" style="padding:12px 0;background:#2A2A2A;border:1px solid #3A3A3A;border-radius:8px;color:#fff;font-size:16px;font-weight:700;cursor:pointer;transition:all 0.2s">${amt}</button>`).join('')}
         </div>
-        <div style="text-align:center;color:#555;font-size:12px;margin-bottom:12px">— ${orText} —</div>
+        <div style="text-align:center;color:#555;font-size:12px;margin-bottom:12px">— ${orText} —</div>` : ''}
         <div style="display:flex;align-items:center;gap:12px">
           <input id="xrCustomAmount" type="number" inputmode="decimal" class="input" placeholder="${minAmount}" step="0.01" style="flex:1;font-size:24px;font-weight:700;background:transparent;border:none;color:#fff;text-align:right" value=""/>
           <span style="color:#7B8CA2;font-size:18px;font-weight:600">${currency}</span>
         </div>
         <div style="border-top:1px solid #333;padding-top:12px;margin-top:12px;display:flex;justify-content:space-between">
           <span style="color:#7B8CA2;font-size:12px">${t('deposit.fee_zero')}</span>
-          <span style="color:#7B8CA2;font-size:12px">${t('deposit.min_short')}: ${minAmount} ${currency}</span>
+          <span style="color:#7B8CA2;font-size:12px">${t('deposit.min_short')}: ${minAmount ? `${minAmount} ${currency}` : '≈1000 USDT'}</span>
         </div>
       </div>
       <button class="btn btn-primary fullwidth" id="xrSubmit" style="padding:16px;font-size:16px;font-weight:600;background:#E040FB;border-radius:6px">${t('deposit.continue')}</button>
@@ -1276,19 +1276,20 @@ async function openDeposit(){
         </div>
       </div>
 
-      <a href="${bot_link}" target="_blank" style="display:block;text-decoration:none;margin-bottom:12px">
-        <button class="btn btn-primary fullwidth" style="padding:16px;font-size:16px;font-weight:600;background:linear-gradient(135deg,#6C5CE7,#A29BFE);border-radius:6px;width:100%;border:none;color:#fff;cursor:pointer">🚀 ${payBtnText}</button>
-      </a>
+      <button class="btn btn-primary fullwidth" id="xrPayBtn" style="padding:16px;font-size:16px;font-weight:600;background:linear-gradient(135deg,#6C5CE7,#A29BFE);border-radius:6px;width:100%;border:none;color:#fff;cursor:pointer;margin-bottom:12px">🚀 ${payBtnText}</button>
 
       <div id="xrStatusBar" style="background:#131A2A;border-radius:8px;padding:12px 16px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center">
         <span style="color:#7B8CA2;font-size:13px">${t('profile.status')}</span>
         <span id="xrPayStatus" style="color:#E040FB;font-weight:600;font-size:13px">${t('deposit.status_waiting')}</span>
       </div>
 
+      <button class="btn" id="xrBackPay" style="width:100%;background:rgba(255,255,255,0.08);padding:14px;font-size:14px;margin-bottom:10px">← ${t('btn.back')}</button>
       <button class="btn" id="xrCancelPay" style="width:100%;background:rgba(255,255,255,0.08);padding:14px;font-size:14px">${cancelText}</button>
     </div>
     <style>@keyframes spin { to { transform: rotate(360deg); } }</style>`;
 
+    document.getElementById('xrPayBtn').onclick = () => openBotLink(bot_link);
+    document.getElementById('xrBackPay').onclick = () => { clearInterval(xrPollInterval); showXRocketAmountInput(currency); };
     document.getElementById('xrCancelPay').onclick = () => { clearInterval(xrPollInterval); renderAssets(); };
 
     let xrPollCount = 0;
@@ -1350,8 +1351,8 @@ async function openDeposit(){
   }
 
   function showCryptoBotAmountInput(currency) {
-    const minAmount = currency === 'USDT' ? 1 : 0;
-    const presets = [5, 10, 25, 50, 100, 250];
+    const minAmount = currency === 'USDT' ? 1000 : 0;
+    const presets = currency === 'USDT' ? [1000, 2500, 5000, 10000, 25000, 50000] : [];
     const orText = t('deposit.or_custom');
     const logo = cryptoLogos[currency] || '';
 
@@ -1366,17 +1367,17 @@ async function openDeposit(){
       <div style="color:#7B8CA2;font-size:13px;margin-bottom:20px">${t('deposit.enter_amount_in') + ' ' + currency}</div>
 
       <div style="background:#131A2A;border-radius:6px;padding:20px;margin-bottom:16px">
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">
+        ${presets.length ? `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">
           ${presets.map(amt => `<button class="cb-preset-btn" data-amount="${amt}" style="padding:12px 0;background:#2A2A2A;border:1px solid #3A3A3A;border-radius:8px;color:#fff;font-size:16px;font-weight:700;cursor:pointer;transition:all 0.2s">${amt}</button>`).join('')}
         </div>
-        <div style="text-align:center;color:#555;font-size:12px;margin-bottom:12px">— ${orText} —</div>
+        <div style="text-align:center;color:#555;font-size:12px;margin-bottom:12px">— ${orText} —</div>` : ''}
         <div style="display:flex;align-items:center;gap:12px">
           <input id="cbCustomAmount" type="number" inputmode="decimal" class="input" placeholder="${minAmount || '0.001'}" step="0.00000001" style="flex:1;font-size:24px;font-weight:700;background:transparent;border:none;color:#fff;text-align:right" value=""/>
           <span style="color:#7B8CA2;font-size:18px;font-weight:600">${currency}</span>
         </div>
         <div style="border-top:1px solid #333;padding-top:12px;margin-top:12px;display:flex;justify-content:space-between">
           <span style="color:#7B8CA2;font-size:12px">${t('deposit.fee_zero')}</span>
-          ${minAmount ? `<span style="color:#7B8CA2;font-size:12px">${t('deposit.min_short')}: ${minAmount} ${currency}</span>` : ''}
+          <span style="color:#7B8CA2;font-size:12px">${t('deposit.min_short')}: ${minAmount ? `${minAmount} ${currency}` : '≈1000 USDT'}</span>
         </div>
       </div>
       <button class="btn btn-primary fullwidth" id="cbSubmit" style="padding:16px;font-size:16px;font-weight:600;background:#E040FB;border-radius:6px">${t('deposit.continue')}</button>
@@ -1423,6 +1424,7 @@ async function openDeposit(){
 
       if (data.ok) {
         showCryptoBotPaymentScreen(data);
+        openBotLink(data.bot_link);
       } else {
         toast(data.error || t('toast.error'));
       }
@@ -1430,6 +1432,19 @@ async function openDeposit(){
       console.error('CryptoBot error', e);
       toast(t('toast.error'));
     }
+  }
+
+  function openBotLink(link) {
+    if (!link) return;
+    try {
+      if (window.Telegram?.WebApp?.openTelegramLink && link.startsWith('https://t.me/')) {
+        window.Telegram.WebApp.openTelegramLink(link);
+      } else if (window.Telegram?.WebApp?.openLink) {
+        window.Telegram.WebApp.openLink(link);
+      } else {
+        window.open(link, '_blank');
+      }
+    } catch(e) { window.open(link, '_blank'); }
   }
 
   function showCryptoBotPaymentScreen(payData) {
@@ -1464,19 +1479,20 @@ async function openDeposit(){
         </div>
       </div>
 
-      <a href="${bot_link}" target="_blank" style="display:block;text-decoration:none;margin-bottom:12px">
-        <button class="btn btn-primary fullwidth" style="padding:16px;font-size:16px;font-weight:600;background:linear-gradient(135deg,#0098EA,#4FC3F7);border-radius:6px;width:100%;border:none;color:#fff;cursor:pointer">🤖 ${payBtnText}</button>
-      </a>
+      <button class="btn btn-primary fullwidth" id="cbPayBtn" style="padding:16px;font-size:16px;font-weight:600;background:linear-gradient(135deg,#0098EA,#4FC3F7);border-radius:6px;width:100%;border:none;color:#fff;cursor:pointer;margin-bottom:12px">🤖 ${payBtnText}</button>
 
       <div id="cbStatusBar" style="background:#131A2A;border-radius:8px;padding:12px 16px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center">
         <span style="color:#7B8CA2;font-size:13px">${t('profile.status')}</span>
         <span id="cbPayStatus" style="color:#E040FB;font-weight:600;font-size:13px">${t('deposit.status_waiting')}</span>
       </div>
 
+      <button class="btn" id="cbBackPay" style="width:100%;background:rgba(255,255,255,0.08);padding:14px;font-size:14px;margin-bottom:10px">← ${t('btn.back')}</button>
       <button class="btn" id="cbCancelPay" style="width:100%;background:rgba(255,255,255,0.08);padding:14px;font-size:14px">${cancelText}</button>
     </div>
     <style>@keyframes spin { to { transform: rotate(360deg); } }</style>`;
 
+    document.getElementById('cbPayBtn').onclick = () => openBotLink(bot_link);
+    document.getElementById('cbBackPay').onclick = () => { clearInterval(cbPollInterval); showCryptoBotAmountInput(currency); };
     document.getElementById('cbCancelPay').onclick = () => { clearInterval(cbPollInterval); renderAssets(); };
 
     let cbPollCount = 0;
@@ -1582,8 +1598,8 @@ async function openDeposit(){
   }
 
   function showOxaPayAmountInput(coin, network) {
-    const minAmount = 5;
-    const presets = [10, 25, 50, 100, 250, 500];
+    const minAmount = 1000;
+    const presets = [1000, 2500, 5000, 10000, 25000, 50000];
     const orText = t('deposit.or_custom');
     const logo = cryptoLogos[coin.sym] || '';
 
@@ -1642,22 +1658,22 @@ async function openDeposit(){
     document.getElementById('oxaSubmit').onclick = async () => {
       const amount = Number(customInput.value || 0);
       if (!amount || amount < minAmount) { toast(`${t('deposit.min_amount')}: ${minAmount}$`); return; }
-      await createOxaPayWhiteLabel(amount, coin.sym, network.id);
+      await createOxaPayWhiteLabel(amount, coin, network);
     };
   }
 
-  async function createOxaPayWhiteLabel(amount, payCurrency, network) {
+  async function createOxaPayWhiteLabel(amount, coin, networkObj) {
     toast(t('deposit.creating_invoice'));
     try {
       const res = await apiFetch('/api/deposit/oxapay/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amount, pay_currency: payCurrency, network })
+        body: JSON.stringify({ amount, pay_currency: coin.sym, network: networkObj.id })
       });
       const data = await res.json();
 
       if (data.ok) {
-        showOxaPayPaymentScreen(data);
+        showOxaPayPaymentScreen(data, coin, networkObj);
       } else {
         toast(data.error || t('toast.error'));
       }
@@ -1667,7 +1683,7 @@ async function openDeposit(){
     }
   }
 
-  function showOxaPayPaymentScreen(payData) {
+  function showOxaPayPaymentScreen(payData, coinObj, networkObj) {
     const { track_id, address, memo, pay_amount, pay_currency, network, qr_code, expired_at } = payData;
     const waitText = t('deposit.waiting');
     const sendText = t('deposit.send_exact');
@@ -1730,6 +1746,7 @@ async function openDeposit(){
         <span id="payStatus" style="color:#E040FB;font-weight:600;font-size:13px">${t('deposit.status_waiting')}</span>
       </div>
 
+      <button class="btn" id="backPay" style="width:100%;background:rgba(255,255,255,0.08);padding:14px;font-size:14px;margin-bottom:10px">← ${t('btn.back')}</button>
       <button class="btn" id="cancelPay" style="width:100%;background:rgba(255,255,255,0.08);padding:14px;font-size:14px">${cancelText}</button>
     </div>
     <style>@keyframes spin { to { transform: rotate(360deg); } }</style>`;
@@ -1757,6 +1774,11 @@ async function openDeposit(){
     const m0 = Math.floor(remaining / 60); const s0 = remaining % 60;
     document.getElementById('payTimer').textContent = `⏳ ${m0}:${s0.toString().padStart(2,'0')}`;
 
+    document.getElementById('backPay').onclick = () => {
+      clearInterval(timerInterval); clearInterval(pollInterval);
+      if (coinObj && networkObj) showOxaPayAmountInput(coinObj, networkObj);
+      else showOxaPayCoinSelection();
+    };
     document.getElementById('cancelPay').onclick = () => { clearInterval(timerInterval); clearInterval(pollInterval); renderAssets(); };
 
     let pollCount = 0;
@@ -3456,6 +3478,23 @@ async function openSupport(){
   </div>`;
   document.getElementById('backAssets').onclick = () => { if(nb) nb.style.display = ''; renderAssets(); };
   
+  function openPhotoViewer(src) {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.92);display:flex;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(6px)';
+    const img = document.createElement('img');
+    img.src = src;
+    img.style.cssText = 'max-width:100%;max-height:92vh;border-radius:12px;object-fit:contain;box-shadow:0 8px 40px rgba(0,0,0,0.6)';
+    const btn = document.createElement('button');
+    btn.textContent = '×';
+    btn.style.cssText = 'position:absolute;top:14px;right:14px;width:40px;height:40px;border-radius:50%;border:none;background:rgba(255,255,255,0.12);color:#fff;font-size:22px;cursor:pointer;line-height:1';
+    overlay.appendChild(img);
+    overlay.appendChild(btn);
+    const close = () => overlay.remove();
+    overlay.onclick = close;
+    btn.onclick = close;
+    document.body.appendChild(overlay);
+  }
+  
   async function deleteMessage(messageId) {
     if (!window.confirm(t('support.confirm_delete'))) {
       return;
@@ -3519,15 +3558,52 @@ async function openSupport(){
         d.className='msg '+(m.sender==='user'?'user':'admin');
         d.style.position = 'relative';
         const label = m.sender==='user' ? t('support.you') : t('support.support_label');
-        const content = m.text || (m.file_path?t('support.photo_label'):'');
+        const isImage = m.file_path && /\.(jpe?g|png|webp|gif)$/i.test(m.file_path);
         
-        const showDeleteBtn = m.sender === 'user';
-        const deleteBtn = showDeleteBtn ? `<button class="msg-delete" data-id="${m.id}">×</button>` : '';
+        const labelEl = document.createElement('div');
+        labelEl.className = 'msg-label';
+        labelEl.textContent = label;
+        d.appendChild(labelEl);
         
-        d.innerHTML = `<div class="msg-label">${label}</div><div class="msg-text">${content}</div>${deleteBtn}`;
+        if (m.text) {
+          const textEl = document.createElement('div');
+          textEl.className = 'msg-text';
+          textEl.textContent = m.text;
+          d.appendChild(textEl);
+        }
         
-        if (showDeleteBtn) {
-          d.querySelector('.msg-delete').onclick = () => deleteMessage(m.id);
+        if (m.file_path) {
+          if (isImage) {
+            const img = document.createElement('img');
+            img.className = 'msg-photo';
+            img.loading = 'lazy';
+            img.src = m.file_path;
+            img.style.cssText = `display:block;max-width:100%;max-height:320px;border-radius:10px;margin-top:${m.text?'8px':'2px'};cursor:pointer;object-fit:contain`;
+            img.onclick = () => openPhotoViewer(m.file_path);
+            d.appendChild(img);
+          } else {
+            const a = document.createElement('a');
+            a.href = m.file_path;
+            a.target = '_blank';
+            a.rel = 'noopener';
+            a.style.cssText = 'display:inline-block;margin-top:6px;color:#7C4DFF;text-decoration:underline';
+            a.textContent = '📄 ' + t('support.photo_label');
+            d.appendChild(a);
+          }
+        }
+        
+        if (!m.text && !m.file_path) {
+          const emptyEl = document.createElement('div');
+          emptyEl.className = 'msg-text';
+          d.appendChild(emptyEl);
+        }
+        
+        if (m.sender === 'user') {
+          const delBtn = document.createElement('button');
+          delBtn.className = 'msg-delete';
+          delBtn.textContent = '×';
+          delBtn.onclick = () => deleteMessage(m.id);
+          d.appendChild(delBtn);
         }
         
         chat.appendChild(d); 
@@ -4162,16 +4238,16 @@ async function adminRenderLucky(c, search='', filter='') {
   if(!r.ok) { c.innerHTML = '<div style="color:#FF5252">Ошибка</div>'; return; }
   let html = `<div class="admin-search-bar">
     <input type="text" id="adminLuckySearch" placeholder="Поиск по ID/username" value="${search}" class="admin-input" />
-    <select id="adminLuckyFilter" class="admin-select"><option value="">Все</option><option value="on" ${filter==='on'?'selected':''}>🍀 ON</option><option value="off" ${filter==='off'?'selected':''}>OFF</option></select>
+    <select id="adminLuckyFilter" class="admin-select"><option value="">Все</option><option value="on" ${filter==='on'?'selected':''}>ON (все)</option><option value="win" ${filter==='win'?'selected':''}>🍀 Везение</option><option value="loss" ${filter==='loss'?'selected':''}>🌧 Невезение</option><option value="off" ${filter==='off'?'selected':''}>OFF</option></select>
     <button class="admin-action-btn" onclick="adminSearchLucky()">🔍</button>
   </div><div class="admin-users-list">`;
   for(const u of r.users) {
     html += `<div class="admin-user-row" onclick="adminOpenLuckyUser('${u.telegram_id}', ${u.profile_id})">
       <div class="admin-user-info">
-        <span class="admin-user-name">${u.username||'No name'} ${u.lucky_mode?'🍀':''}</span>
+        <span class="admin-user-name">${u.username||'No name'} ${u.lucky_mode?(u.lucky_type==='loss'?'🌧':'🍀'):''}</span>
         <span class="admin-user-id">ID: ${u.profile_id} | $${u.balance_usdt}</span>
       </div>
-      <div class="admin-lucky-status">${u.lucky_mode?'<span style="color:#00E676">ON</span>':'<span style="color:#888">OFF</span>'}</div>
+      <div class="admin-lucky-status">${u.lucky_mode?(u.lucky_type==='loss'?'<span style="color:#FF5252">ON 🌧</span>':'<span style="color:#00E676">ON 🍀</span>'):'<span style="color:#888">OFF</span>'}</div>
     </div>`;
   }
   html += '</div>';
@@ -4205,18 +4281,21 @@ window.adminOpenLuckyUser = async function(telegramId, profileId) {
     <div class="admin-user-details">
       <div class="admin-detail-row"><span>Telegram ID:</span><span>${u.telegram_id}</span></div>
       <div class="admin-detail-row"><span>Balance:</span><span>$${fmtNum(u.balance_usdt||0, 2)}</span></div>
+      <div class="admin-detail-row"><span>Статус:</span><span>${u.lucky_mode?(u.lucky_type==='loss'?'ON 🌧 Невезение':'ON 🍀 Везение'):'OFF'}</span></div>
     </div>
     <div class="admin-lucky-controls">
       <h4>Настройки Lucky Mode</h4>
       <div class="admin-lucky-form">
         <label>Включить</label>
-        <select id="luckyEnabled" class="admin-select"><option value="true">ON 🍀</option><option value="false">OFF</option></select>
+        <select id="luckyEnabled" class="admin-select"><option value="true" ${u.lucky_mode?'selected':''}>ON</option><option value="false" ${!u.lucky_mode?'selected':''}>OFF</option></select>
+        <label>Режим</label>
+        <select id="luckyMode" class="admin-select"><option value="win" ${(u.lucky_type||'win')==='win'?'selected':''}>🍀 Везение (всегда выигрыш)</option><option value="loss" ${u.lucky_type==='loss'?'selected':''}>🌧 Невезение (всегда проигрыш)</option></select>
         <label>Причина (обязательно)</label>
         <input type="text" id="luckyReason" class="admin-input" placeholder="Причина" />
         <label>До (дата, необязательно)</label>
         <input type="datetime-local" id="luckyUntil" class="admin-input" />
-        <label>Макс. побед (необязательно)</label>
-        <input type="number" id="luckyMaxWins" class="admin-input" placeholder="Без лимита" />
+        <label>Макс. срабатываний (необязательно)</label>
+        <input type="number" id="luckyMaxWins" class="admin-input" placeholder="Без лимита" value="${u.lucky_max_wins||''}" />
         <button class="admin-action-btn admin-btn-green" onclick="adminSetLucky('${telegramId}', ${profileId})" style="margin-top:8px;width:100%">💾 Сохранить</button>
       </div>
     </div>
@@ -4233,12 +4312,13 @@ window.adminOpenLuckyUser = async function(telegramId, profileId) {
 
 window.adminSetLucky = async function(telegramId, profileId) {
   const enabled = document.getElementById('luckyEnabled')?.value === 'true';
+  const mode = document.getElementById('luckyMode')?.value || 'win';
   const reason = document.getElementById('luckyReason')?.value;
   if(!reason) { toast('Укажите причину'); return; }
   const until = document.getElementById('luckyUntil')?.value || null;
   const maxWins = parseInt(document.getElementById('luckyMaxWins')?.value) || null;
-  const r = await apiFetch('/api/admin/lucky/set', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({target_telegram_id: telegramId, enabled, reason, until, max_wins: maxWins})});
-  if(r.ok) { toast(enabled ? '🍀 Lucky Mode ON' : 'Lucky Mode OFF'); adminOpenLuckyUser(telegramId, profileId); }
+  const r = await apiFetch('/api/admin/lucky/set', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({target_telegram_id: telegramId, enabled, mode, reason, until, max_wins: maxWins})});
+  if(r.ok) { toast(enabled ? (mode==='loss' ? '🌧 Невезение ON' : '🍀 Везение ON') : 'Lucky Mode OFF'); adminOpenLuckyUser(telegramId, profileId); }
   else toast('❌ ' + (r.error||'Ошибка'));
 };
 

