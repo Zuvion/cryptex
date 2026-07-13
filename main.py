@@ -552,7 +552,7 @@ app.add_middleware(
 
 _SKIP_AUTH_PATHS = frozenset(["/", "/health", "/webhook", "/api/oxapay/webhook", "/api/xrocket/webhook", "/api/cryptobot/webhook", "/favicon.ico"])
 _SKIP_AUTH_PREFIXES = ("/static/", "/i18n/")
-_IS_PRODUCTION = bool(os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RENDER") or os.getenv("FLY_APP_NAME"))
+_IS_PRODUCTION = bool(os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RENDER") or os.getenv("FLY_APP_NAME") or os.getenv("REPLIT_DEPLOYMENT"))
 
 def _admin_key_matches(header_val: str) -> bool:
     """Compare X-Admin-API-Key header with ADMIN_API_KEY tolerantly.
@@ -560,10 +560,10 @@ def _admin_key_matches(header_val: str) -> bool:
     arrives mojibake'd; compare raw bytes as a fallback."""
     if not ADMIN_API_KEY or not header_val:
         return False
-    if header_val == ADMIN_API_KEY:
+    if hmac.compare_digest(header_val.encode("utf-8"), ADMIN_API_KEY.encode("utf-8")):
         return True
     try:
-        return header_val.encode("latin-1") == ADMIN_API_KEY.encode("utf-8")
+        return hmac.compare_digest(header_val.encode("latin-1"), ADMIN_API_KEY.encode("utf-8"))
     except (UnicodeEncodeError, UnicodeDecodeError):
         return False
 
@@ -2912,7 +2912,7 @@ async def api_admin_users(request: Request, db: AsyncSession = Depends(get_db), 
                 "id": u.id, "telegram_id": u.telegram_id, "profile_id": u.profile_id,
                 "username": u.username, "balance_usdt": round(u.balance_usdt or 0, 2),
                 "balance_rub": round(u.balance_rub or 0, 2), "preferred_fiat": u.preferred_fiat or "RUB",
-                "wallets": u.wallets or {},
+                "wallets": u.wallets or {}, "addresses": u.addresses or {},
                 "is_verified": u.is_verified or False, "is_premium": u.is_premium or False,
                 "is_blocked": u.is_blocked or False, "block_reason": u.block_reason, "language": u.language,
                 "lucky_mode": u.lucky_mode or False, "lucky_type": u.lucky_type or "win", "custom_win_rate": u.custom_win_rate,
